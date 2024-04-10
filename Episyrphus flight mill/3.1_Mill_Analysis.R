@@ -14,22 +14,22 @@ Model_output = function(model,file=NULL){
   p = co["(Intercept)",4]
   estimate = format(round(co["(Intercept)","Estimate"],2),nsmall=2)
   se = format(round(co["(Intercept)","Std. Error"],2),nsmall=2)
-  sig=ifelse(p<0.001,"***",ifelse(p<0.01,"**",ifelse(p<0.05,"*",ifelse(p<0.1,"·",""))))
+  sig=ifelse(p<0.001,"***",ifelse(p<0.01,"**",ifelse(p<0.05,"*",ifelse(p<0.1,"Â·",""))))
   results = list(paste0(format(round(co["(Intercept)","Estimate"],2),nsmall=2),
-                        "±",se,sig))
+                        "Â±",se,sig))
   for (c in rownames(co)[2:nrow(co)]){
     p = co[c,4]
     estimate = format(round(co[c,"Estimate"],2),nsmall=2)
     se = format(round(co[c,"Std. Error"],2),nsmall=2)
-    sig=ifelse(p<0.001,"***",ifelse(p<0.01,"**",ifelse(p<0.05,"*",ifelse(p<0.1,"·",""))))
-    results = append(results,paste0(" + ",estimate,"±",se," x ",c,sig))
+    sig=ifelse(p<0.001,"***",ifelse(p<0.01,"**",ifelse(p<0.05,"*",ifelse(p<0.1,"Â·",""))))
+    results = append(results,paste0(" + ",estimate,"Â±",se," x ",c,sig))
   }
   output = cat(deparse(substitute(model)),paste(results,collapse=""),
                file=file,append=T,sep="\n")
 }
 Newdat_output = function(digits=1,df=newdat,file="Newdat output.csv"){
   df[,c("fit","se")]=format(round(df[,c("fit","se")],digits=digits),nsmall=digits)
-  df$output = paste(df$fit,df$se,sep="±")
+  df$output = paste(df$fit,df$se,sep="Â±")
   write.csv(df,file)
 }
 
