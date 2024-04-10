@@ -345,7 +345,7 @@ single_plot = function(Independent,ndat=newdat,df=df1,fill="grey",fly_quantile=F
   colnames(df) = sub(Independent,"ind",colnames(df))
   xlab = list(sunNorm="Daily sunshine proportion",
               Headwind_pass="Daily relative wind direction (1 = headwind)",
-              Temp="Average daily temperature (°C)",
+              Temp="Average daily temperature (Â°C)",
               rain="Total daily precipitation (mm)")[[Independent]]
   plt = ggplot(df,aes(x=ind,y=counts+1))+
     scale_y_log10(label=scales::comma)+
@@ -503,7 +503,7 @@ sapply(c("rain","sunNorm","Temp","Headwind_pass"),function(col){
   Median_fly = df1[order(df1[[col]])[medFly],col]
   return(Median_fly)
 })#,USE.NAMES=T,simplify=F)
-# Medians: Temp = 9.695°, rain = 0mm, Headwind_pass = 0.7031, sunNorm = 0.3924
-# 0.5 fly: Temp = 12.039°, rain = 0mm, Headwind_pass = 0.9543, sunNorm = 0.8522
-# 0.2 fly: Temp = 11.21°, rain = 0mm, Headwind_pass = 0.838, sunNorm = 0.548
-# 0.1 fly: Temp = 9.821°, rain = 0mm, Headwind_pass = 0.826, sunNorm = 0.376
+# Medians: Temp = 9.695Â°, rain = 0mm, Headwind_pass = 0.7031, sunNorm = 0.3924
+# 0.5 fly: Temp = 12.039Â°, rain = 0mm, Headwind_pass = 0.9543, sunNorm = 0.8522
+# 0.2 fly: Temp = 11.21Â°, rain = 0mm, Headwind_pass = 0.838, sunNorm = 0.548
+# 0.1 fly: Temp = 9.821Â°, rain = 0mm, Headwind_pass = 0.826, sunNorm = 0.376
