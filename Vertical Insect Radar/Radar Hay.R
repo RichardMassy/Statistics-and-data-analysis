@@ -1,5 +1,5 @@
 # 0 Preparation and function load ####
-setwd("C:/Users/rm669/OneDrive - University of Exeter/Data and analysis/23 Radar")
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 library(circular)
 library(ggplot2)
 
@@ -220,7 +220,7 @@ ggplot(data=d3,aes(x=y*3600,y=x,fill=ft))+
 dev.off()
 #####
 # 2.1 Iterative Rayleigh test for calculating proportion of directional movement ####
-# Generate directional angles (kappa 2.7 produces ~ 40° circular standard deviation)
+# Generate directional angles (kappa 2.7 produces ~ 40ï¿½ circular standard deviation)
 angles = list("dir"=rvonmises(1000,mu=circular(pi,template="geographics",
                                                modulo="2pi"),kappa=2.7))
 round(sd(angles$dir)*180/pi,digits=3)
@@ -237,7 +237,7 @@ angles$all = c(angles$dir,angles$nondir)
 hist(as.numeric(angles$all))
 rose.diag(angles$all,bins=36,prop=2.2,axes=F,ticks=F,col="lightblue")
 
-# Allocate angles into 5° bins (clunky but works)
+# Allocate angles into 5ï¿½ bins (clunky but works)
 angles$binned = cut(angles$all,seq(0,2*pi,pi/36))
 levels(angles$binned) = seq(2.5,357.5,5) # rename bin factors to corresponding mid angles
 
