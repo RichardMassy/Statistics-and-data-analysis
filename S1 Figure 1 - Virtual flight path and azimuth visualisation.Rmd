@@ -1,0 +1,304 @@
+---
+title: "Azimuth and elevation model creation"
+author: "Richard Massy"
+date: "2023-07-21"
+output:
+  word_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval=FALSE)
+```
+
+1.0 Figure 1 - Virtual flight paths: load functions
+
+File dependencies: Sun position detail.csv
+Environment dependencies: None
+
+Functions:
+
+pathPrep() loads the azimuths of the days/ location combo into a dataframe which is saved to the environment as "s" and saves an empty variable "Tracks" to the environment which will contain the subsequent migration tracks
+
+compPath() simulates migration tracks for the supplied compensation levels and saves them to "tracks"
+
+compInaccPath() simulates migration tracks for the supplied compensation levels with added inaccuracy and saves them to "tracks"
+
+avgPath(), avgInaccPath(), jumpPath() and jumpInaccPath() do the same for time averaging and step compensation respectively
+
+plotTrack() takes the "tracks" global variable and visualises it, producing figure 1a
+```{r}
+pathPrep = function(days=c("180901","180902","180903","180904","180905"),
+                    location="Bujaruelo"){
+  sunPosDat = subset(read.csv("Sun position detail.csv"),Location==location)
+  s <<- do.call(rbind,lapply(days,function(day){
+    hours = sunPosDat[sunPosDat$Date==day,]$Time
+    s1 = data.frame("minutes"=seq(min(hours),max(hours),1/1440))
+    model1 = smooth.spline(sunPosDat[sunPosDat$Date==day,c("Time","Azimuth")],
+                           all.knots=T)
+    s1$azimuths = predict(model1,s1$minutes)$y/180*pi
+    return(s1)
+  }))
+  tracks <<- NULL
+}
+# Fullcomp
+compPath = function(comp_levels = c(0,0.7,1)){
+  for (level in comp_levels){
+    comp_vectors = (s$azimuths-level*(s$azimuths-pi))%%(2*pi)
+    track = matrix(rep(c(0,rep(NA,nrow(s))),2),
+                   ncol=2,dimnames=list(NULL,c("x","y")))
+    for (i in seq_along(comp_vectors)){
+      track[i+1,] = c(track[i,"x"] + sin(comp_vectors[[i]]),
+                      track[i,"y"] + cos(comp_vectors[[i]]))
+    }
+    tracks[[as.character(level)]] <<- list(track)
+  }
+}
+# Fullcomp + inacc
+compInaccPath = function(comp_levels=c(0,0.5,1),nTrack=5,kapp=3.289){
+  if (!"circular" %in%(.packages())){require(circular)}
+  for (level in comp_levels){
+    track = list()
+    for (n in 1:nTrack){
+      inacc=rvonmises(nrow(s),circular(0,unit="radians",template="geographics",
+                                       modulo="2pi"),kappa = kapp)
+      comp_vectors = (s$azimuths-level*(s$azimuths-pi)+inacc)%%(2*pi)
+      trackN = matrix(rep(c(0,rep(NA,nrow(s))),2),
+                      ncol=2,dimnames=list(NULL,c("x","y")))
+      for (i in seq_along(comp_vectors)){
+        trackN[i+1,] = c(trackN[i,"x"] + sin(comp_vectors[[i]]),
+                         trackN[i,"y"] + cos(comp_vectors[[i]]))
+      }
+      track[[paste(n)]] = trackN
+    }
+    tracks[[paste0(level,"*")]] <<- track
+  }
+}
+# Time averaging (optimum (no inacc) 1-5 Sep '18 = 19.375)
+avgPath = function(step_levels = c(19.1*0.7,19.1),zenith = 0.5829041){
+  for (level in step_levels){
+    step_vectors = (s$azimuths+(zenith-s$minutes)*level/7.5*pi)%%(2*pi)
+    track = matrix(rep(c(0,rep(NA,nrow(s))),2),
+                   ncol=2,dimnames=list(NULL,c("x","y")))
+    for (i in seq_along(step_vectors)){
+      track[i+1,] = c(track[i,"x"] + sin(step_vectors[[i]]),
+                      track[i,"y"] + cos(step_vectors[[i]]))
+    }
+    tracks[[paste0(level,"°/h")]] <<- list(track)
+  }
+}
+# Time averaging + Inacc
+avgInaccPath = function(step_levels=c(19.1),nTrack=5,zenith=0.5829041,kapp=3.289){
+  if (!"circular" %in%(.packages())){require(circular)}
+  for (level in step_levels){
+    track = list()
+    for (n in 1:nTrack){
+      inacc=rvonmises(nrow(s),circular(0,unit="radians",template="geographics",
+                                       modulo="2pi"),kappa = kapp)
+      step_vectors = (s$azimuths+(zenith-s$minutes)*level/7.5*pi+inacc)%%(2*pi)
+      trackN = matrix(rep(c(0,rep(NA,nrow(s))),2),
+                      ncol=2,dimnames=list(NULL,c("x","y")))
+      for (i in seq_along(step_vectors)){
+        trackN[i+1,] = c(trackN[i,"x"] + sin(step_vectors[[i]]),
+                         trackN[i,"y"] + cos(step_vectors[[i]]))
+      }
+      track[[paste(n)]] = trackN
+    }
+    tracks[[paste0(level,"°/h*")]] <<- track
+  }
+}
+
+
+# Jumpcomp (optimum (no inacc) 1-5 Sep '18 = 121.2)
+jumpPath = function(jump_levels = c(121*0.7,121),zenith = 0.5829041){
+  for (level in jump_levels){
+    lvRad = level/180*pi
+    jump_vectors = (s$azimuths + round(0.5+zenith-s$minutes)*lvRad - lvRad/2)%%(2*pi)
+    track = matrix(rep(c(0,rep(NA,nrow(s))),2),
+                   ncol=2,dimnames=list(NULL,c("x","y")))
+    for (i in seq_along(jump_vectors)){
+      track[i+1,] = c(track[i,"x"] + sin(jump_vectors[[i]]),
+                      track[i,"y"] + cos(jump_vectors[[i]]))
+    }
+    tracks[[paste0(level,"°")]] <<- list(track)
+  }
+}
+
+# Jumpcomp + Inacc
+jumpInaccPath = function(jump_levels=c(121),nTrack=5,zenith=0.5829041,kapp=3.289){
+  if (!"circular" %in%(.packages())){require(circular)}
+  for (level in jump_levels){
+    track = list()
+    lvRad = level/180*pi
+    for (n in 1:nTrack){
+      inacc=rvonmises(nrow(s),circular(0,unit="radians",template="geographics",
+                                       modulo="2pi"),kappa = kapp)
+      jump_vectors =(s$azimuths+round(0.5+zenith-s$minutes)*lvRad-lvRad/2+inacc)%%(2*pi)
+      trackN = matrix(rep(c(0,rep(NA,nrow(s))),2),
+                      ncol=2,dimnames=list(NULL,c("x","y")))
+      for (i in seq_along(step_vectors)){
+        trackN[i+1,] = c(trackN[i,"x"] + sin(jump_vectors[[i]]),
+                         trackN[i,"y"] + cos(jump_vectors[[i]]))
+      }
+      track[[paste(n)]] = trackN
+    }
+    tracks[[paste0(level,"°*")]] <<- track
+  }
+}
+
+# Plotting virtual flight path
+plotTrack = function(b0=0.14,b1=0.7,b2=2){
+  par(pty="s",mar=c(4.1,4.1,3.1,2.1)) # Mar order = bottom, left, top, right
+  plot(NULL, xlim=c(0,length(tracks)*0.2-0.15),ylim=c(1,0),xaxt="n",las=1,asp=1,
+       ylab="Southward efficiency",xlab="Compensation level",
+       main="Simulated flight paths 1-5 September 2018")
+  polygon(x=c(b0,b1,b1,b0),y=c(-1,-1,2,2),border=NA,
+          col=rgb(0,255,50,alpha=30,max=255))
+  polygon(x=c(b1,b2,b2,b1),y=c(-1,-1,2,2),border=NA,
+          col=rgb(255,250,0,alpha=50,max=255))
+  if (!b2==2){
+    polygon(x=c(b2,2,2,b2),y=c(-1,-1,2,2),border=NA,
+            col=rgb(0,0,250,alpha=30,max=255))
+  }
+  abline(h=c(0,1),lty=2,col="grey")
+  for (i in seq_along(tracks)){
+    for (j in seq_along(tracks[[i]])){
+      tracks[[i]][[j]] = tracks[[i]][[j]]/3925
+      tracks[[i]][[j]][,"x"] = tracks[[i]][[j]][,"x"] + (i-1)/5
+      lines(-y~x,data=tracks[[i]][[j]],lwd=0.6)
+    }
+  }
+  axis(1,at=seq(0,(i-1)/5,length.out=length(tracks)),labels=names(tracks))
+}
+
+```
+1.1a Figure 1a - Virtual flight paths running: visualisation of full, time averaging and step compensation
+
+File dependencies: Sun position detail.csv(downloaded)
+Environment dependencies: pathPrep + compPath + avgPath + jumpPath + plotTrack(all from 1.0)
+```{r}
+
+pathPrep()
+compPath()
+avgPath()
+jumpPath()
+plotTrack(b0=0.13,b1=0.5,b2=0.9)
+```
+
+1.1b Virtual flight paths running: old version including inaccuracy visualisation
+
+File dependencies: Sun position detail.csv(downloaded)
+Environment dependencies: pathPrep + compPath + compInaccPath + avgPath + avgInaccPath + plotTrack(all from 1.0)
+```{r}
+pathPrep()
+compPath()
+compInaccPath(comp_levels = 1, nTrack = 3)
+avgPath()
+avgInaccPath(step_levels = 19.4, nTrack = 3)
+plotTrack()
+```
+
+1.2 visualising the azimuth change over time for different locations showing the how the real and estimated azimuths compare for the different compensation strategies
+
+File dependencies: Sun position detail.csv(downloaded)
+Environment dependencies: pathPrep(1.0)
+
+1.2a load plotComp() function and run an example (time averaging, Bujaruelo)
+```{r}
+plotComp = function(df=s,zenith=0.5835,CL=1,AL=17.6,SL=123,methods="full",partial=F,
+                    colour=F){
+  df$hours = df$minutes*24
+  df$azimuths = df$azimuths*180/pi
+  equations= list("full"=function(p=1){180+CL*p*(df$azimuths-180)},
+                  "avg"=function(p=1){180-((zenith-df$minutes)*AL*p*24)},
+                  "step"=function(p=1){180-(round(0.5+zenith-df$minutes)*SL*p-SL*p/2)})
+  colours = list("full"=rgb(0,255,50,alpha=30,max=255),
+              "avg"=rgb(255,250,0,alpha=50,max=255),
+              "step"=rgb(0,0,250,alpha=30,max=255))
+  if (colour){
+    plot(azimuths~hours,data=df,type="n",
+         xaxt="n",yaxt="n",xlab="",ylab="")
+    rect(par("usr")[1], par("usr")[3],
+         par("usr")[2], par("usr")[4],
+         col = colours[[methods[1]]])
+    par(new=T)
+  }
+  plot(azimuths~hours,data=df,type="l",lwd=2,col="red",
+       xlab="Time (hours)",ylab="Azimuth")
+  abline(h=180,lty=2,col="grey")
+  for (method in methods){
+    df$vectors = equations[[method]]()
+    lines(vectors~hours,data=df,type="l",lwd=2,col="blue",lty="dashed")
+    if (partial){
+      df$vectors = equations[[method]](p=partial)
+      lines(vectors~hours,data=df,type="l",lwd=2,col="deepskyblue",lty="dashed")
+    }
+  }
+}
+pathPrep(days="180901")
+plotComp(method="avg")
+```
+
+1.2b Figure 1b - run the azimuth visualisation for Bujaruelo and Panama
+
+NOTE: graph dimensions are designed for export so appear stretched
+
+```{r}
+pathPrep(days="180901")
+par(mfrow=c(3,1),mar=c(5-1,4,4-3,2-1)+0.1,cex.axis=1.3,cex.lab=1.4)
+lapply(c("full","avg","step"),function(method){
+  plotComp(methods=method,partial=0.7,colour=T)})
+
+
+pathPrep(days="180901",location="Neotropical")
+lapply(c("full","avg","step"),function(method){
+  plotComp(zenith=0.555 ,AL=22.8,SL=180,methods=method,partial=0.7)})
+```
+
+1.2b Figure 1b - export the azimuth visualisations for Falsterbo, Bujaruelo, Maghreb and Panama in proper dimensions
+
+Saves:
+"RGraphCompDemoFal" (file of the azimuth visualisations for Falsterbo)
+"RGraphCompDemoBuj" (file of the azimuth visualisations for Bujaruelo)
+"RGraphCompDemoMag" (file of the azimuth visualisations for Maghreb)
+"RGraphCompDemoNeo" (file of the azimuth visualisations for Panama)
+
+NOTE: takes a few seconds to run & might have compatability issues saving images
+
+SECOND NOTE: if adjusting the code, the zenith time, adjustment rate (AL) and step size (SL) must be manually input into the plotComp() function. The default is Bujaruelo.
+
+Zeniths: Falsterbo 0.5476, Bujaruelo 0.5835, Maghreb 0.5217, Subtropical 0.5553
+AL: Falsterbo 16.4, Bujaruelo 17.6, Maghreb 19.0, Subtropical 22.8
+SL: Falsterbo 118, Bujaruelo 123, Maghreb 134, Subtropical 180
+```{r}
+pathPrep(days="180901",location="Falsterbo")
+png(file="RGraphCompDemo1Fal.png",res=1000,width=3200,height=7200,pointsize=12,
+    antialias="cleartype")
+par(mfrow=c(3,1),mar=c(5-1,4,4-3,2-1)+0.1,cex.axis=1.4,cex.lab=1.8)
+lapply(c("full","avg","step"),function(method){
+  plotComp(zenith=0.548 ,AL=16.4,SL=118,methods=method,partial=0.7)})
+dev.off()
+
+pathPrep(days="180901")
+png(file="RGraphCompDemo2Buj.png",res=1000,width=3200,height=7200,pointsize=12,
+    antialias="cleartype")
+par(mfrow=c(3,1),mar=c(5-1,4,4-3,2-1)+0.1,cex.axis=1.4,cex.lab=1.8)
+lapply(c("full","avg","step"),function(method){
+  plotComp(zenith=0.584 ,AL=17.6,SL=123,methods=method,partial=0.7,colour=T)})
+dev.off()
+
+pathPrep(days="180901",location="Maghreb")
+png(file="RGraphCompDemo3Mag.png",res=1000,width=3200,height=7200,pointsize=12,
+    antialias="cleartype")
+par(mfrow=c(3,1),mar=c(5-1,4,4-3,2-1)+0.1,cex.axis=1.4,cex.lab=1.8)
+lapply(c("full","avg","step"),function(method){
+  plotComp(zenith=0.522 ,AL=19.0,SL=134,methods=method,partial=0.7)})
+dev.off()
+
+pathPrep(days="180901",location="Neotropical")
+png(file="RGraphCompDemo4Neo.png",res=1000,width=3200,height=7200,pointsize=12,
+    antialias="cleartype")
+par(mfrow=c(3,1),mar=c(5-1,4,4-3,2-1)+0.1,cex.axis=1.4,cex.lab=1.8)
+lapply(c("full","avg","step"),function(method){
+  plotComp(zenith=0.555 ,AL=22.8,SL=180,methods=method,partial=0.7)})
+dev.off()
+```
