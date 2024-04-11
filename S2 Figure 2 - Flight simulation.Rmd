@@ -1,0 +1,233 @@
+---
+title: "Flight simulation"
+author: "Richard Massy"
+date: "2023-07-21"
+output:
+  word_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval=FALSE)
+```
+
+2.0 Load the simulation model, run it, and plot the efficiency of each compensation type.
+
+File dependencies: Sun position detail.csv + Radar weighting data.csv (downloaded)
+Environment dependencies: None
+
+NOTE: the adjustment rate of time averaging is referred to as "Step_size"; not to be confused with step compensation, which is referred to here as "Jumpcomp"
+```{r}
+timeCompAll = function(avg_levels=seq(0,40,0.2),di=180,jump_levels=seq(0,180,1),
+                       comp_levels=seq(0,1,0.01),flying_hours=c(0,24),numDays=1:30,
+                       location="Bujaruelo"){
+  if (!"circular" %in%(.packages())){require(circular)}
+  if (!exists("sunPosDat")){sunPosDat = read.csv("Sun position detail.csv")}
+  if (!is.na(location)){sunPosDat = sunPosDat[sunPosDat$Location==location,]}
+  if (!exists("Weights")){
+    hourWeights = read.csv("Radar weighting data.csv")
+    m1 = smooth.spline(hourWeights$Hour,hourWeights$Abundance)
+    preds = predict(m1,seq(0,24,1/60))
+    preds[[2]][preds[[2]]<0.01] = 0
+    Weights = data.frame("minutes"=seq(flying_hours[1]/24,flying_hours[2]/24,1/1440),
+                         "weights"=preds[[2]][preds[[1]] >= flying_hours[1] & 
+                                                preds[[1]] <= flying_hours[2]])
+  }
+  vector_sum = function(vectors){
+    y = -cos(vectors)
+    x = abs(sin(vectors))
+    c(sum(y*s$weights),sum(y)/nrow(s),sum(x*s$weights),sum(x)/nrow(s))
+  }
+  days = data.frame("minutes"=rep(NA,length(numDays)),
+                    "azimuth_mean_change"=NA,"zenith"=NA,
+                    row.names = sort(unique(sunPosDat$Date))[numDays])
+  r = list()
+  r$f = array(dim = c(length(numDays),length(comp_levels),4),
+              dimnames = list(rownames(days),comp_levels,
+                              c("weight_y","unweight_y","weight_x","unweight_x")))
+  r$a = array(dim = c(nrow(days),length(avg_levels),4),
+              dimnames = list(rownames(days),avg_levels,
+                              c("weight_y","unweight_y","weight_x","unweight_x")))
+  r$s = array(dim = c(nrow(days),length(jump_levels),4),
+              dimnames = list(rownames(days),jump_levels,
+                              c("weight_y","unweight_y","weight_x","unweight_x")))
+  Znorm = 0.541134
+  for (day in rownames(days)){
+    sunPosDay = sunPosDat[sunPosDat$Date==day,]
+    model2 = smooth.spline(sunPosDay[,c("Time","Elevation")],all.knots=T)
+    preds = predict(model2,seq(0.4,0.7,0.00001))
+    zenith = preds$x[which.max(preds$y)]
+    if (zenith <0.41|zenith>0.69){print(paste("WARNING: zenith =",zenith))}
+    
+    sunPosDay$Time = sunPosDay$Time + Znorm - zenith
+    
+    s = Weights[Weights[,1] > min(sunPosDay$Time) & Weights[,1] < max(sunPosDay$Time),]
+    s$weights = s$weights/sum(s$weights)
+    model1 = smooth.spline(sunPosDay[,c("Time","Azimuth")],all.knots=T)
+    s$azimuths = predict(model1,s$minutes)$y
+    r$f[day,,] = t(sapply(comp_levels,function(level){
+      vector_sum(((s$azimuths-level*(s$azimuths-di))%%360)/180*pi)
+    }))
+    r$a[day,,] = t(sapply(avg_levels,function(level){
+      vector_sum(((s$azimuths + (Znorm-s$minutes)*24*level)%%360)/180*pi)
+    }))
+    r$s[day,,] = t(sapply(jump_levels,function(level){
+      vector_sum(((s$azimuths+round(0.5+Znorm-s$minutes)*level-level/2)%%360)/180*pi)
+    }))
+    days[day,] = c(nrow(s),mean(diff(s$azimuths))*60,zenith)
+  }
+  days$day_weight = days$minutes/sum(days$minutes)
+  days$avg_optimum_weighted = as.numeric(colnames(r$a)[max.col(r$a[,,"weight_y"])])
+  days$avg_efficiency_weighted  = apply(r$a[,,"weight_y"],1,max)
+  days$avg_optimum_unweighted = as.numeric(colnames(r$a)[max.col(r$a[,,"unweight_y"])])
+  days$avg_efficiency_unweighted = apply(r$a[,,"unweight_y"],1,max)
+  days$jump_optimum_weighted = as.numeric(colnames(r$s)[max.col(r$s[,,"weight_y"])])
+  days$jump_efficiency_weighted   = apply(r$s[,,"weight_y"],1,max)
+  days$jump_optimum_unweighted = as.numeric(colnames(r$s)[max.col(r$s[,,"unweight_y"])])
+  days$jump_efficiency_unweighted = apply(r$s[,,"unweight_y"],1,max)
+  
+  return(setNames(list(
+    data.frame("Compensation_level" = comp_levels,
+               "Dist_TimeDayWeight" = colSums(r$f[,,"weight_y"]*days$day_weight),
+               "Dist_DayWeight" = colSums(r$f[,,"unweight_y"]*days$day_weight),
+               "Drift_TimeDayWeight" = colSums(r$f[,,"weight_x"]*days$day_weight),
+               "Drift_DayWeight" = colSums(r$f[,,"unweight_x"]*days$day_weight)),
+    data.frame("Avg_rate" = avg_levels,
+               "Dist_TimeDayWeight" = colSums(r$a[,,"weight_y"]*days$day_weight),
+               "Dist_DayWeight" = colSums(r$a[,,"unweight_y"]*days$day_weight),
+               "Drift_TimeDayWeight" = colSums(r$a[,,"weight_x"]*days$day_weight),
+               "Drift_DayWeight" = colSums(r$a[,,"unweight_x"]*days$day_weight)),
+    data.frame("Jump_size" = jump_levels,
+               "Dist_TimeDayWeight" = colSums(r$s[,,"weight_y"]*days$day_weight),
+               "Dist_DayWeight" = colSums(r$s[,,"unweight_y"]*days$day_weight),
+               "Drift_TimeDayWeight" = colSums(r$s[,,"weight_x"]*days$day_weight),
+               "Drift_DayWeight" = colSums(r$s[,,"unweight_x"]*days$day_weight)),
+    days),c("Fullcomp","Timeavg","Jumpcomp","Day_optimums")))
+}
+
+tstart=Sys.time()
+distances = timeCompAll(location="Bujaruelo")
+Sys.time()-tstart
+plot(Dist_TimeDayWeight ~ Compensation_level,
+     data=distances$Fullcomp,main="Full_compensation")
+plot(Dist_TimeDayWeight ~ Avg_rate,data = distances$Timeavg,main="Time averaging")
+plot(Dist_TimeDayWeight ~ Jump_size,data = distances$Jumpcomp,main="Step compensation")
+```
+
+
+2.1 Run compensation models for each location and save as a data file. Plot an example (Time averaging in Maghreeb)
+
+File dependencies: Sun position detail.csv + Radar weighting data.csv(downloaded)
+Environment dependencies: TimeCompAll(2.0)
+Saves: "Flight efficiency models locations" (a R data file containing a list of the three compensation types (full, averaging and step), each containing data frames with the data from the simulation of each location (Bujaruelo, Maghreb, Falsterbo, Neotropical)
+
+NOTE: may take several seconds
+```{r}
+dfsL = list()
+for (location in c("Bujaruelo","Maghreb","Falsterbo","Neotropical")){
+  print(location)
+  models = timeCompAll(location=location)
+  for (model in names(models)){dfsL[[model]][[location]] = models[[model]]}
+}
+plot(Dist_TimeDayWeight ~ Avg_rate,data=dfsL$Timeavg$Maghreb,
+     main="Maghreb time averaging")
+
+```
+
+
+2.2 Figure 2: load simulation output, assemble dataframes into plottable format, load plotting function and run plots for each compensation type
+
+File dependencies: Flight efficiency models locations (made in 2.1)
+Environment dependencies: None
+
+
+```{r}
+library(ggplot2)
+dfs = lapply(dfsL[-4],function(compType){
+  df = do.call(rbind,Map(cbind,compType,Location=names(compType)))
+  reshape(df,varying=c("Drift_TimeDayWeight","Dist_DayWeight",
+                       "Drift_DayWeight","Dist_TimeDayWeight"),
+          direction="long",v.names=c("Drift","Efficiency"),
+          timevar=c("Weighting"),times=c("Unweighted","Time of day"))
+  })
+
+ggplotComp = function(compType="Fullcomp",dataList=dfs,L_Width=0.6){
+  labDict = list(Fullcomp=list(title="Full compensation",x="Compensation level"),
+                 Timeavg=list(title="Time averaging",x="Adjustment rate (degrees / hour)"),
+                 Jumpcomp=list(title="Step compensation",x="Step size (degrees)")
+                 )[[compType]]
+  df = dataList[[compType]]
+  ggplot(df,aes(x=.data[[colnames(df)[1]]],y=Efficiency,
+                colour=Location,linetype=Weighting))+
+    geom_line(linewidth=L_Width)+
+    scale_colour_manual(values=c("Blue","Dark green","Orange","Red"),
+                        labels=c("Falsterbo\n55.4°N","Bujaruelo\n42.7°N",
+                                 "Maghreb\n31.5°N","Panama\n  9.2°N"),
+                        breaks=c("Falsterbo","Bujaruelo","Maghreb","Neotropical"))+
+    theme_minimal()+
+    ylim(NA,1)+
+    theme(legend.text=element_text(size=11,margin=margin(t=5)), 
+          axis.text=element_text(size=12),plot.title=element_text(hjust=0.5))+
+    labs(title=labDict$title,x=labDict$x,y="Directional flight efficiency")
+}
+ggplotComp("Fullcomp",L_Width=0.4)
+ggplotComp("Timeavg",L_Width=0.4)
+ggplotComp("Jumpcomp",L_Width=0.4)
+```
+
+2.3 Interpretation of results
+
+File dependencies: None
+Environment dependencies: dfs
+
+
+2.3a Interpretation of results of phototaxis
+
+See the data frame of the phototaxis efficiencies for each location/ weighting combination
+
+NOTE: Drift, which measures movement in the x axis, is the summed movement of opposite directions. In reality, drift averages to 0 over the day as the errors are symmetrical.
+```{r}
+# Phototaxis
+View(dfs$Fullcomp)
+aggregate(Efficiency~Location+Weighting,data=dfs$Fullcomp,min)
+```
+2.3b Interpretation of results of full (and partial) compensation
+
+Saves: "Table2OUTPUT.csv" (a file containing the data that makes up table 2)
+
+```{r}
+# Fullcomp
+dft = dfs$Fullcomp[dfs$Fullcomp$Location=="Bujaruelo",]
+
+dft = subset(dfs$Fullcomp,Location%in%c("Bujaruelo","Neotropical")
+             & Compensation_level%in%c(0,0.2,0.4,0.6,0.7,0.8,1))
+write.csv(dft,"Table2OUTPUT.csv")
+```
+2.3c Interpretation of results of time averaging (data in table 1)
+
+See the data frame of the maximum efficiencies for each location/ weighting combination
+
+See the console for the corresponding optimal adjustment rate
+
+
+```{r}
+# Time averaging
+aggregate(Efficiency~Location+Weighting,data=dfs$Timeavg,max)
+
+do.call(rbind,lapply(split(dfs$Timeavg,dfs$Timeavg[,c("Location","Weighting")]),
+                     function(x){c(max(x$Efficiency),x[which.max(x$Efficiency),1])
+                     }))
+```
+2.3d Interpretation of results of step compensation
+
+See the data frame of the maximum efficiencies for each location/ weighting combination
+
+See the console for the corresponding optimal midday adjustment step
+
+```{r}
+# Step compensation
+aggregate(Efficiency~Location+Weighting,data=dfs$Jumpcomp,max)
+
+do.call(rbind,lapply(split(dfs$Jumpcomp,dfs$Jumpcomp[,c("Location","Weighting")]),
+                     function(x){c(max(x$Efficiency),x[which.max(x$Efficiency),1])
+  }))
+```

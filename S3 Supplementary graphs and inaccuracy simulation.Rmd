@@ -1,0 +1,452 @@
+---
+title: "Supplementary graphs and inaccuracy"
+author: "Richard Massy"
+date: "2023-07-21"
+output:
+  word_document: default
+  html_document: default
+---
+3.0 Setup the work space. Needed for all blocks.
+
+File dependencies: Sun position detail.csv(downloaded)
+Environment dependencies: None
+```{r, setup}
+knitr::opts_chunk$set(echo = TRUE, eval=FALSE)
+if(!require(circular)){
+    install.packages("circular")
+    library(circular)
+}
+sunPosDat = read.csv("Sun position detail.csv")
+days = sort(as.character(unique(sunPosDat$Date)))[1:30]
+sunPosDat = subset(sunPosDat,Location=="Bujaruelo" & (Date%in%days))
+```
+
+
+3.1 Create sun elevation models and use them to predict the zenith for each day
+
+File dependencies: None
+Environment dependencies: sunPosDat + days(3.0)
+
+```{r}
+zeniths = data.frame("Date" = days, "Noontime" = NA)
+zeniths$Noontime = sapply(zeniths$Date,function(day){
+  model1 = smooth.spline(sunPosDat[sunPosDat$Date==day,c("Time","Elevation")],all.knots=T)
+  preds = predict(model1,seq(0,1,0.0001))
+  preds$x[which.max(preds$y)]
+})
+plot(zeniths)
+```
+
+3.2 Figure S1 - visualising the weighting model. Weighting data = black dots.
+
+File dependencies: Radar weighting data.csv(downloaded)
+Environment dependencies: None
+```{r, echo = FALSE}
+plotWeightsPrep = function(){
+  hourWeights = read.csv("Radar weighting data.csv")
+  m1 = smooth.spline(hourWeights$Hour,hourWeights$Abundance)
+  preds = predict(m1,seq(0,24,1/60))
+  preds[[2]][preds[[2]]<0.01] = 0
+  
+  lPreds = setNames(data.frame(preds),c("Hour","Abundance"))
+  lPreds <<- lPreds[lPreds$Hour>7&lPreds$Hour<19,]
+  hWeights <<- hourWeights[hourWeights$Hour>7&hourWeights$Hour<19,]
+}
+plotWeights = function(){
+  if (!"ggplot2" %in%(.packages())){require(ggplot2)}
+  ggplot(lPreds,aes(x=Hour,y=Abundance))+
+    geom_area(fill="lightblue",alpha=0.5)+
+    geom_line(color="blue")+
+    geom_point(data=hWeights,aes(x=Hour,y=Abundance))+
+    theme_minimal()+
+    labs(y="Hourly abundance")+
+    scale_x_continuous(breaks=seq(8,18,by=2))+
+    theme(text = element_text(size=25))+
+    coord_fixed(ratio=0.4)
+}
+plotWeightsPrep()
+plotWeights()
+```
+
+
+3.3a Figure S2a - Visualising kappa inaccuracy generation. Kappa = 1.811 (moderate accuracy)
+
+File dependencies: None
+Environment dependencies: None
+```{r, echo = FALSE}
+# 1st September = 790 minutes of daylight
+# 100 angles were generated for every minute. Total simulated inaccuracy angles per day (note that each angle is later doubled, doubling the total number of angles):
+790*100
+if (!"circular" %in%(.packages())){require(circular)}
+inacc = rvonmises(79000,circular(pi,unit="radians",template="geographics",modulo="2pi"),kappa = 1.811)
+inacc = c(inacc,-inacc)
+rose.diag(inacc,bins=36,prop=2.2,axes=F,ticks=F,col="lightblue")
+```
+
+3.3b Figure S2b - Visualising kappa inaccuracy generation. Kappa = 1.811 (high accuracy)
+
+File dependencies: None
+Environment dependencies: None
+```{r, echo = FALSE}
+if (!"circular" %in%(.packages())){require(circular)}
+inacc = rvonmises(79000,circular(pi,unit="radians",template="geographics",modulo="2pi"),kappa = 3.289)
+inacc = c(inacc,-inacc)
+rose.diag(inacc,bins=36,prop=2.2,axes=F,ticks=F,col="lightblue")
+```
+
+3.4 Determining the optimum kappa value for different levels of directedness
+
+File dependencies: None
+Environment dependencies: None
+
+NOTE: slow
+```{r}
+if (!"circular" %in%(.packages())){require(circular)}
+
+df5 = data.frame("kappa"=seq(3.285,3.3,0.0001),"generated_r"=NA)
+df5$generated_r = sapply(df5$kappa,function(kap){
+  x = rvonmises(1000000,circular(pi,template="geographics",modulo="2pi"),kap)
+  rayleigh.test(x)$statistic
+})
+
+range(df5$generated_r)
+
+m2 = smooth.spline(df5$kappa,df5$generated_r)
+preds = predict(m2,seq(0,10,0.001))
+plot(generated_r~kappa,data=df5,pch=20)
+lines(preds,col="red")
+
+df51 = as.data.frame(preds,col.names = c("k","r"))
+
+# Find kappa closest to targeted r values
+for (i in rs <- c(0.664,0.8,0.83,0.9)){
+  print(df51[which.min(abs(df51[,2]-i)),])
+}
+for (i in rs){
+  print(unlist(approx(x = preds$y,y=preds$x,xout=i)))
+}
+```
+
+3.5a Load the full compensation model and run an example.
+
+File dependencies: Radar weighting data.csv(downloaded)
+Environment dependencies: sunPosDat(3.0)
+```{r}
+PartCompModel = function(comp_levels=seq(0,1,0.01),di=180,nGen=100,kapp=0,
+                         flying_hours=c(0,24),numDays=1:30){
+  if (!"circular" %in%(.packages())){require(circular)}
+  if (!exists("sunPosDat")){sunPosDat = read.csv("Sun position detail.csv")}
+  if (!exists("Weights")){
+    hourWeights = read.csv("Radar weighting data.csv")
+    m1 = smooth.spline(hourWeights$Hour,hourWeights$Abundance)
+    preds = predict(m1,seq(0,24,1/60))
+    preds[[2]][preds[[2]]<0.01] = 0
+    Weights = data.frame("minutes"=seq(flying_hours[1]/24,flying_hours[2]/24,1/1440),
+                         "weights"=preds[[2]][preds[[1]] >= flying_hours[1] & 
+                                                preds[[1]] <= flying_hours[2]])
+  }
+  dayWeights = setNames(rep(NA,length(numDays)),unique(sunPosDat$Date)[numDays])
+  a1 = array(rep(NA,2*length(numDays)*length(comp_levels)),
+             dim = c(length(numDays),length(comp_levels),2),
+             dimnames = list(names(dayWeights),comp_levels,c("weighted","unweighted")))
+  for (day in names(dayWeights)){
+    hours = sunPosDat[sunPosDat$Date==day,"Time"]
+    s = Weights[Weights[,1] > min(hours) & Weights[,1] < max(hours),]
+    s$weights = s$weights/sum(s$weights)
+    model1 = smooth.spline(sunPosDat[sunPosDat$Date==day,c("Time","Azimuth")],
+                           all.knots=T)
+    s$azimuths = predict(model1,s$minutes)$y
+    if (kapp > 0){
+      inacc = rvonmises(nGen*nrow(s),circular(0,unit="degrees",template="geographics",
+                                        modulo="2pi"),kappa=kapp)
+      inacc = c(inacc,-inacc)
+    }
+    a1[day,,] = t(sapply(comp_levels,function(level){
+      if (kapp > 0){comp_vectors =((s$azimuths-level*(s$azimuths-di))+inacc)%%360
+      } else {comp_vectors = (s$azimuths-level*(s$azimuths-di))%%360}
+      tot = -cos(comp_vectors/180*pi)
+      c(sum(tot*s$weights),sum(tot)/nrow(s))
+    }))
+    dayWeights[day] = nrow(s)
+  }
+  dayWeights = dayWeights/sum(dayWeights)
+  if (kapp > 0){a1 = a1 / (nGen*2)}
+  
+  return(data.frame("Compensation_level" = comp_levels,
+                    "Dist_TimeWeight" = colMeans(a1[,,"weighted"]),
+                    "Dist_TimeDayWeight"=colSums(a1[,,"weighted"]*dayWeights),
+                    "Dist_unweighted" = colMeans(a1[,,"unweighted"]),
+                    "Dist_DayWeight" = colSums(a1[,,"unweighted"]*dayWeights)))
+}
+tstart=Sys.time()
+distances = PartCompModel(kapp=0)
+Sys.time()-tstart
+plot(Dist_TimeDayWeight ~ Compensation_level,data = distances)
+```
+
+
+3.5b Run full-compensation models and save as a data file (takes several minutes)
+
+File dependencies: Radar weighting data.csv(downloaded)
+Environment dependencies: sunPosDat(3.0) + PartCompModel(3.5a)
+
+
+```{r}
+kappas = c(1.811,3.289,0)
+dfsc = list()
+tstart = Sys.time()
+for (k in kappas){
+  print(k)
+  dfsc[[as.character(k)]] = PartCompModel(seq(0,1,0.005),nGen=10,kapp=k)
+}
+Sys.time()-tstart
+```
+
+
+3.5c Combine full-compensation data
+
+File dependencies: None
+Environment dependencies: dfsc(3.5b)
+```{r}
+importComp = function(){
+  kappaKey = setNames(c("1","0.66","0.83"),c("0","1.811","3.289"))
+  for (kap in names(dfsc)){
+    dfsc[[kap]]$Kappa = kap
+    dfsc[[kap]]$Directedness = kappaKey[kap]
+  }
+  df1 = do.call(rbind,dfsc)
+  df1$Kappa = factor(df1$Kappa,levels=c("0",rev(unique(df1$Kappa[!df1$Kappa=="0"]))))
+  df1$Directedness = factor(df1$Directedness,levels=rev(unique(df1$Directedness)))
+  return(df1)
+}
+df1 = importComp()
+df1
+```
+
+
+
+3.5d Figure 1a: Visualise time-compensation simulations
+
+File dependencies: None
+Environment dependencies: df1(2.1c)
+```{r}
+ggplotComp = function(){
+  df1=reshape(df1,varying=list(names(df1)[c(3,5)]),direction="long",v.names="Efficiency",
+              timevar="Weighting",times=c("Time of day","Unweighted"))[,-(2:3)]
+  if (!"ggplot2" %in%(.packages())){require(ggplot2)}
+  ggplot(df1,aes(x=Compensation_level,y=Efficiency,
+                 colour=Directedness,linetype=Weighting))+
+    geom_line(size=0.6)+
+    scale_colour_manual(values=c("Blue","Dark green","Orange"))+
+    theme_minimal()+
+    theme(legend.text=element_text(size=11),axis.text=element_text(size=12),
+          plot.title=element_text(hjust=0.5))+
+    ylim(0,1)+
+    labs(title="Full compensation",
+         x="Compensation level",y="Southward flight efficiency")
+}
+ggplotComp()
+```
+
+
+3.5e Run Pearson's correlations between the efficiency of different compensation strategies
+
+File dependencies: None
+Environment dependencies: df1(3.5c)
+```{r}
+library(ggcorrplot)
+df3 = df1[,c(3,5,6)]
+df3$ID = rep(1:(length(df3$Kappa)/length(unique(df3$Kappa))),
+             length(unique(df3$Kappa)))
+df3 = reshape(data=df3,idvar="ID",timevar="Kappa",direction="wide")[,-1]
+
+
+m1 = cor(df3,use="pairwise.complete.obs")
+ggcorrplot(m1,show.diag=F,type="lower",lab=T,lab_size = 2)
+
+min(m1)
+which.min(m1)
+minP = print(mapply("[[",dimnames(m1),arrayInd(which.min(m1),dim(m1)))) # The least correlating pair
+
+cor.test(df3[,minP[1]],df3[,minP[2]])
+
+```
+
+3.6a Setup the time-averaging model and run an example
+
+File dependencies: Radar weighting data.csv(downloaded)
+Environment dependencies: sunPosDat(3.0), zeniths(3.1)
+```{r}
+TimeAvgModel = function(step_levels=seq(14,20,0.1),di=180,nGen=100,kapp=0,
+                        flying_hours=c(0,24),numDays=1:30){
+  if (!"circular" %in%(.packages())){require(circular)}
+  if (!exists("zeniths")){zeniths = read.csv("Data/Noontimes.csv")}
+  if (!exists("sunPosDat")){sunPosDat = read.csv("Sun position detail.csv")}
+  if (!exists("Weights")){
+    hourWeights = read.csv("Radar weighting data.csv")
+    m1 = smooth.spline(hourWeights$Hour,hourWeights$Abundance)
+    preds = predict(m1,seq(0,24,1/60))
+    preds[[2]][preds[[2]]<0.01] = 0
+    Weights = data.frame("minutes"=seq(flying_hours[1]/24,flying_hours[2]/24,1/1440),
+                         "weights"=preds[[2]][preds[[1]] >= flying_hours[1] & 
+                                                preds[[1]] <= flying_hours[2]])
+  }
+  days = matrix(NA,nrow=length(numDays),ncol=2,
+                dimnames=list(unique(sunPosDat$Date)[numDays],
+                              c("day_weight","azimuth_mean_change")))
+  a2 = array(rep(NA,2*nrow(days)*length(step_levels)),
+             dim = c(nrow(days),length(step_levels),2),
+             dimnames = list(rownames(days),step_levels,c("weighted","unweighted")))
+  for (day in rownames(days)){
+    hours = sunPosDat[sunPosDat$Date==day,"Time"]
+    zenith = zeniths[zeniths$Date==day,"Noontime"]
+    s = Weights[Weights[,1] > min(hours) & Weights[,1] < max(hours),]
+    s$weights = s$weights/sum(s$weights)
+    model1 = smooth.spline(sunPosDat[sunPosDat$Date==day,c("Time","Azimuth")],
+                           all.knots=T)
+    s$azimuths = predict(model1,s$minutes)$y
+    if (kapp > 0){
+      inacc = rvonmises(nGen*nrow(s),circular(0,unit="degrees",template="geographics",
+                                        modulo="2pi"),kappa=kapp)
+      inacc = c(inacc,-inacc)
+    }
+    a2[day,,] = t(sapply(step_levels,function(level){
+      if (kapp >0){step_vectors=(s$azimuths+(zenith-s$minutes)*24*level+inacc)%%360
+      } else {step_vectors = (s$azimuths + (zenith-s$minutes)*24*level)%%360}
+      tot = -cos(step_vectors/180*pi)
+      c(sum(tot*s$weights),sum(tot)/nrow(s))
+    }))
+    days[day,] = c(nrow(s),mean(diff(s$azimuths))*60)
+  }
+  days[,"day_weight"] = days[,"day_weight"]/sum(days[,"day_weight"])
+  if (kapp > 0){a2 = a2 / (nGen*2)}
+  
+  return(list(
+    data.frame("Step_size" = step_levels,
+               "Dist_TimeWeight" = colMeans(a2[,,"weighted"]),
+               "Dist_TimeDayWeight"= colSums(a2[,,"weighted"]*days[,"day_weight"]),
+               "Dist_unweighted" = colMeans(a2[,,"unweighted"]),
+               "Dist_DayWeight" = colSums(a2[,,"unweighted"]*days[,"day_weight"])),
+    data.frame("azimuth_mean_change" = days[,"azimuth_mean_change"],
+               "optimum_weighted" = as.numeric(colnames(a2)[max.col(a2[,,"weighted"])]),
+               "efficiency_weighted" = apply(a2[,,"weighted"],1,max),
+               "optimum_unweighted"=as.numeric(colnames(a2)[max.col(a2[,,"unweighted"])]),
+               "efficiency_unweighted" = apply(a2[,,"unweighted"],1,max),
+               "day_weight" = days[,"day_weight"])))
+}
+tstart = Sys.time()
+distancesA = TimeAvgModel(seq(0,30,0.5),kapp=0)[[1]]
+Sys.time()-tstart
+plot(Dist_TimeDayWeight ~ Step_size,data = distancesA)
+```
+
+
+3.6b Run time-averaging models including inaccuracy (may take several minutes)
+
+File dependencies: Radar weighting data.csv(downloaded)
+Environment dependencies: sunPosDat(3.0), zeniths(3.1), TimeAvgModel(3.6a)
+```{r}
+kappas = c(1.811,3.289,0)
+dfsa = dfsaOp = list()
+tstart = Sys.time()
+for (k in kappas){
+  print(k)
+  m1 = TimeAvgModel(step_levels=seq(0,30,0.1),kapp=k,nGen=10)
+  dfsa[[as.character(k)]] = m1[[1]]
+  dfsaOp[[as.character(k)]] = m1[[2]]
+}
+Sys.time()-tstart
+
+```
+
+3.6c Combine time-averaging data
+
+File dependencies: None
+Environment dependencies: dfsa(3.6b)
+```{r}
+importStep = function(){
+  kappaKey = setNames(c("1","0.66","0.83"),c("0","1.811","3.289"))
+  for (kap in names(dfsa)){
+    dfsa[[kap]]$Kappa = kap
+    dfsa[[kap]]$Directedness = kappaKey[kap]
+  }
+  df2 = do.call(rbind,dfsa)
+  df2$Kappa = factor(df2$Kappa,levels=c("0",rev(unique(df2$Kappa[!df2$Kappa=="0"]))))
+  df2$Directedness = factor(df2$Directedness,levels=rev(unique(df2$Directedness)))
+  return(df2)
+}
+df2 = importStep()
+df2
+```
+
+
+3.6d Figure 2b: Visualise time-averaging simulations
+
+File dependencies: None
+Environment dependencies: df2(3.6c)
+```{r}
+ggplotStep = function(){
+  df2=reshape(df2,varying=list(names(df2)[c(3,5)]),direction="long",v.names="Efficiency",
+              timevar="Weighting",times=c("Time of day","Unweighted"))[,-(2:3)]
+  if (!"ggplot2" %in%(.packages())){require(ggplot2)}
+  ggplot(df2,aes(x=Step_size,y=Efficiency,
+                 colour=Directedness,linetype=Weighting))+
+    geom_line(size=0.6)+
+    scale_colour_manual(values=c("Blue","Dark green","Orange"))+
+    theme_minimal()+
+    theme(legend.text=element_text(size=11),axis.text=element_text(size=12),
+          plot.title=element_text(hjust=0.5))+
+    ylim(0,1)+
+    labs(title = "Time averaging",
+         x="Adjustment rate (degrees / hour)",y="Southward flight efficiency")
+}
+ggplotStep()
+```
+
+
+3.6e Time averaging - efficiency using optimum adjustment rate for each day
+
+File dependencies: None
+Environment dependencies: dfsaOp(3.6b)
+```{r}
+for (df in names(dfsaOp)){
+  dfsaOp[[df]]$Kappa = df
+}
+df3 = do.call(rbind,dfsaOp)
+df3$Kappa = factor(df3$Kappa,levels=c("0",rev(unique(df3$Kappa[!df3$Kappa=="0"]))))
+
+df3$efficiency_weightedDay = df3$efficiency_weighted*df3$day_weight
+df3$efficiency_unweightedDay = df3$efficiency_unweighted*df3$day_weight
+
+maxDistances=setNames(aggregate(df3[,c("efficiency_weightedDay",
+                                             "efficiency_unweightedDay")],
+                                      by=list(df3$Kappa),sum),
+                      c("Kappa","TimeWeight","Unweighted"))
+maxDistances
+```
+
+
+3.6f Figure S3: Time averaging - how the optimum adjustment rate changes daily
+
+File dependencies: None
+Environment dependencies: df3(3.6e)
+```{r}
+# Daily optimums
+df3$Day = sapply(rownames(df3),function(x){
+  as.numeric(substr(x,nchar(x)-1,nchar(x)))
+})
+
+plotOptStep = function(){
+  par(mar=c(5,4,4,12),xpd=T)
+  plot(azimuth_mean_change ~ Day,data=df3[df3$Kappa=="0",],type="l",col="red",
+       xlab = "Day",ylab = "Degrees per hour",cex=2,
+       ylim=c(floor(min(df3$azimuth_mean_change)),ceiling(max(df3$optimum_weighted))))
+  points(optimum_weighted ~ Day, data=df3[df3$Kappa=="0",],pch=16,col="blue")
+  points(optimum_unweighted ~ Day, data=df3[df3$Kappa=="0",],pch=18,col="blue")
+  legend("topright",inset = c(-0.6,0),bty="n",title="Optimum adjustment rate",
+         legend=c("Weighted","Unweighted","Mean azimuth change"),
+         pch = c(16,18,NA), lty = c(NA,NA,1),col = c("blue","blue","red"))
+}
+plotOptStep()
+```
+
