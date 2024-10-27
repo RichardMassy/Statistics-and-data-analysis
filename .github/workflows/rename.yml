@@ -9,5 +9,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: git mv "Episyrphus flight mill: R, Python" "Episyrphus_flight_mill:_R_Python"
+      - run: git mv Episyrphus%20flight%20mill%3A%20R%2C%20Python Episyrphus_flight_mill:_R_Python
       - uses: EndBug/add-and-commit@v5.1.0
